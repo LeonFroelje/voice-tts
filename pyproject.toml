@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "piper-api"
+version = "0.1.0"
+description = "FastAPI Piper TTS Server"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "pydantic-settings",
+    "python-dotenv",
+    "piper-tts" # The Python wrapper for Piper
+]
+
+[project.scripts]
+piper-api = "main:main"
+
+[tool.setuptools]
+py-modules = [
+    "main",
+    "config"
+]
