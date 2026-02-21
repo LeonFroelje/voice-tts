@@ -110,7 +110,7 @@
               };
 
               serviceConfig = {
-                ExecStart = "${cfg.package}/bin/voiceTts";
+                ExecStart = "${cfg.package}/bin/voice_tts";
 
                 # State Management (Stores the downloaded ONNX voices)
                 StateDirectory = "voiceTts-models";
