@@ -40,7 +40,7 @@
     {
       packages.${system} = {
         default = python.pkgs.buildPythonApplication {
-          pname = "piper-api";
+          pname = "voiceTts";
           version = "0.1.0";
           pyproject = true;
           src = ./.;
@@ -50,7 +50,7 @@
           # Ensure FFmpeg is available to the application at runtime for MP3 conversion
           nativeBuildInputs = [ pkgs.makeWrapper ];
           postInstall = ''
-            wrapProgram $out/bin/piper-api \
+            wrapProgram $out/bin/voiceTts \
               --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.ffmpeg_7-headless ]}
           '';
         };
@@ -64,11 +64,11 @@
           ...
         }:
         let
-          cfg = config.services.piper-api;
+          cfg = config.services.voiceTts;
           defaultPkg = self.packages.${pkgs.system}.default;
         in
         {
-          options.services.piper-api = with lib; {
+          options.services.voiceTts = with lib; {
             enable = mkEnableOption "Piper TTS API Server";
 
             package = mkOption {
@@ -91,13 +91,13 @@
 
             modelsDir = mkOption {
               type = types.str;
-              default = "/var/lib/piper-api-models";
+              default = "/var/lib/voiceTts-models";
               description = "Directory to store downloaded Piper ONNX models.";
             };
           };
 
           config = lib.mkIf cfg.enable {
-            systemd.services.piper-api = {
+            systemd.services.voiceTts = {
               description = "Piper TTS FastAPI Service";
               wantedBy = [ "multi-user.target" ];
               after = [ "network.target" ];
@@ -110,10 +110,10 @@
               };
 
               serviceConfig = {
-                ExecStart = "${cfg.package}/bin/piper-api";
+                ExecStart = "${cfg.package}/bin/voiceTts";
 
                 # State Management (Stores the downloaded ONNX voices)
-                StateDirectory = "piper-api-models";
+                StateDirectory = "voiceTts-models";
 
                 # Hardening
                 DynamicUser = true;
