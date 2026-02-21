@@ -50,7 +50,7 @@
           # Ensure FFmpeg is available to the application at runtime for MP3 conversion
           nativeBuildInputs = [ pkgs.makeWrapper ];
           postInstall = ''
-            wrapProgram $out/bin/voiceTts \
+            wrapProgram $out/bin/voice_tts \
               --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.ffmpeg_7-headless ]}
           '';
         };
