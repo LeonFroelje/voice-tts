@@ -69,48 +69,107 @@
         in
         {
           options.services.voiceTts = with lib; {
-            enable = mkEnableOption "Piper TTS API Server";
+            enable = mkEnableOption "Piper TTS MQTT Worker";
 
             package = mkOption {
               type = types.package;
               default = defaultPkg;
-              description = "The Piper API package to use.";
+              description = "The Piper TTS package to use.";
             };
 
-            host = mkOption {
+            environmentFile = mkOption {
+              type = types.nullOr types.path;
+              default = null;
+              description = ''
+                Path to an environment file for secrets/overrides.
+                To prevent leaks, this file should contain:
+                - PIPER_S3_SECRET_KEY
+              '';
+            };
+
+            # --- MQTT Connection ---
+            mqttHost = mkOption {
               type = types.str;
-              default = "127.0.0.1";
-              description = "Hostname or IP to bind the server to.";
+              default = "localhost";
+              description = "Mosquitto broker IP/Hostname";
             };
 
-            port = mkOption {
+            mqttPort = mkOption {
               type = types.int;
-              default = 8080;
-              description = "Port for the FastAPI server.";
+              default = 1883;
+              description = "Mosquitto broker port";
             };
 
+            # --- Object Storage (S3 Compatible) ---
+            s3Endpoint = mkOption {
+              type = types.str;
+              default = "http://localhost:3900";
+              description = "URL to S3 storage";
+            };
+
+            s3AccessKey = mkOption {
+              type = types.str;
+              default = "your-access-key";
+              description = "S3 Access Key";
+            };
+
+            s3Bucket = mkOption {
+              type = types.str;
+              default = "voice-commands";
+              description = "S3 Bucket Name";
+            };
+
+            # --- Piper Models ---
             modelsDir = mkOption {
               type = types.str;
               default = "/var/lib/voiceTts-models";
               description = "Directory to store downloaded Piper ONNX models.";
             };
+
+            defaultVoice = mkOption {
+              type = types.str;
+              default = "de_DE-thorsten-high";
+              description = "The default Piper voice model to use and preload.";
+            };
+
+            # --- System ---
+            logLevel = mkOption {
+              type = types.str;
+              default = "INFO";
+              description = "Logging Level (DEBUG, INFO, ERROR)";
+            };
           };
 
           config = lib.mkIf cfg.enable {
             systemd.services.voiceTts = {
-              description = "Piper TTS FastAPI Service";
+              description = "Piper TTS MQTT Worker Service";
               wantedBy = [ "multi-user.target" ];
               after = [ "network.target" ];
 
-              environment = {
-                PIPER_HOST = cfg.host;
-                PIPER_PORT = toString cfg.port;
-                PIPER_MODELS_DIR = cfg.modelsDir;
-                PYTHONUNBUFFERED = "1";
-              };
+              environment =
+                let
+                  env = {
+                    PIPER_MQTT_HOST = cfg.mqttHost;
+                    PIPER_MQTT_PORT = toString cfg.mqttPort;
+
+                    PIPER_S3_ENDPOINT = cfg.s3Endpoint;
+                    PIPER_S3_ACCESS_KEY = cfg.s3AccessKey;
+                    PIPER_S3_BUCKET = cfg.s3Bucket;
+
+                    PIPER_MODELS_DIR = cfg.modelsDir;
+                    PIPER_DEFAULT_VOICE = cfg.defaultVoice;
+
+                    PIPER_LOG_LEVEL = cfg.logLevel;
+
+                    PYTHONUNBUFFERED = "1";
+                  };
+                in
+                lib.filterAttrs (n: v: v != null) env;
 
               serviceConfig = {
+                # Update this if your binary name changed in pyproject.toml during the refactor!
                 ExecStart = "${cfg.package}/bin/voice_tts";
+                EnvironmentFile = lib.mkIf (cfg.environmentFile != null) cfg.environmentFile;
 
                 # State Management (Stores the downloaded ONNX voices)
                 StateDirectory = "voiceTts-models";

@@ -3,7 +3,7 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "voice_tts"
+name = "voice-tts"
 version = "0.1.0"
 description = "FastAPI Piper TTS Server"
 requires-python = ">=3.11"
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-voice_tts = "main:main"
+voice-tts = "main:main"
 
 [tool.setuptools]
 py-modules = [

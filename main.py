@@ -83,6 +83,8 @@ def synthesize_and_upload(text: str) -> str:
         endpoint_url=settings.s3_endpoint,
         aws_access_key_id=settings.s3_access_key,
         aws_secret_access_key=settings.s3_secret_key.get_secret_value(),
+        region_name="garage",
+        config=boto3.session.Config(signature_version="s3v4"),
     )
 
     # 1. Check if the audio already exists in S3 (Cache Hit)
