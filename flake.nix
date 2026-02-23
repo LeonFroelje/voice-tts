@@ -122,7 +122,7 @@
             # --- Piper Models ---
             modelsDir = mkOption {
               type = types.str;
-              default = "/var/lib/voiceTts-models";
+              default = "/var/lib/voiceTts";
               description = "Directory to store downloaded Piper ONNX models.";
             };
 
@@ -141,7 +141,7 @@
           };
 
           config = lib.mkIf cfg.enable {
-            systemd.services.voiceTts = {
+            systemd.services.voice-tts = {
               description = "Piper TTS MQTT Worker Service";
               wantedBy = [ "multi-user.target" ];
               after = [ "network.target" ];
@@ -172,7 +172,7 @@
                 EnvironmentFile = lib.mkIf (cfg.environmentFile != null) cfg.environmentFile;
 
                 # State Management (Stores the downloaded ONNX voices)
-                StateDirectory = "voiceTts-models";
+                StateDirectory = "voiceTts";
 
                 # Hardening
                 DynamicUser = true;
