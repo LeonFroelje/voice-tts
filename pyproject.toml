@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "FastAPI Piper TTS Server"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi",
-    "uvicorn",
+    "boto3",
+    "aiomqtt",
     "pydantic",
     "pydantic-settings",
     "python-dotenv",

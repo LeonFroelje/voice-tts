@@ -1,51 +1,45 @@
 import os
+import json
 import wave
 import logging
-import urllib.request
+import asyncio
+import hashlib
 import tempfile
-import subprocess
-import uvicorn
-from contextlib import asynccontextmanager
+import urllib.request
 from typing import Dict
 
-from starlette.background import BackgroundTask
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
+import boto3
+import aiomqtt
+from botocore.exceptions import ClientError
 from piper import PiperVoice
 
 from config import settings
 
-# ==========================================
-# LOGGING SETUP
-# ==========================================
-# Configure standard logging format
+# --- Logging Setup ---
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("piper_api")
+logger = logging.getLogger("TTSWorker")
 
 loaded_voices: Dict[str, PiperVoice] = {}
 os.makedirs(settings.models_dir, exist_ok=True)
 
 
+# --- Piper Logic ---
 def download_piper_model(model_name: str):
     """Downloads the ONNX and JSON config for a Piper voice if missing."""
     base_url = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
-
     parts = model_name.split("-")
     if len(parts) < 3:
-        raise ValueError(
-            f"Invalid Piper model name format (e.g., de_DE-thorsten-high): {model_name}"
-        )
+        raise ValueError(f"Invalid Piper model name format: {model_name}")
 
-    lang_family = parts[0].split("_")[0]  # 'de'
-    lang_code = parts[0]  # 'de_DE'
-    dataset = parts[1]  # 'thorsten'
-    quality = parts[2]  # 'high'
-
+    lang_family, lang_code, dataset, quality = (
+        parts[0].split("_")[0],
+        parts[0],
+        parts[1],
+        parts[2],
+    )
     onnx_url = (
         f"{base_url}/{lang_family}/{lang_code}/{dataset}/{quality}/{model_name}.onnx"
     )
@@ -67,137 +61,130 @@ def download_piper_model(model_name: str):
 def get_voice(voice_name: str) -> PiperVoice:
     """Gets a cached voice or loads it, downloading it if necessary."""
     piper_model_name = voice_name.strip()
-
     if piper_model_name not in loaded_voices:
-        try:
-            onnx_path, json_path = download_piper_model(piper_model_name)
-            logger.info(f"Loading '{piper_model_name}' into memory...")
-            loaded_voices[piper_model_name] = PiperVoice.load(onnx_path)
-        except Exception as e:
-            logger.error(
-                f"Failed to load voice '{piper_model_name}': {e}", exc_info=True
-            )
-            raise HTTPException(
-                status_code=400,
-                detail=f"Failed to load voice '{piper_model_name}': {str(e)}",
-            )
-
+        onnx_path, _ = download_piper_model(piper_model_name)
+        logger.info(f"Loading '{piper_model_name}' into memory...")
+        loaded_voices[piper_model_name] = PiperVoice.load(onnx_path)
     return loaded_voices[piper_model_name]
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Pre-load the default German voice on startup
-    logger.info(f"Pre-loading default voice: {settings.default_voice}")
-    get_voice(settings.default_voice)
-    yield
-    logger.info("Clearing loaded voices from memory during shutdown...")
-    loaded_voices.clear()
+# --- Synthesis & S3 Logic ---
+def synthesize_and_upload(text: str) -> str:
+    """Checks S3 cache, synthesizes if missing, uploads, and returns URL."""
+    # Create a deterministic filename based on the text and voice
+    text_hash = hashlib.md5(
+        f"{settings.default_voice}_{text}".encode("utf-8")
+    ).hexdigest()
+    filename = f"tts_{text_hash}.wav"
+    file_url = f"{settings.s3_endpoint}/{settings.s3_bucket}/{filename}"
 
-
-app = FastAPI(title="Piper TTS API", lifespan=lifespan)
-
-
-class SpeechRequest(BaseModel):
-    input: str
-    voice: str = settings.default_voice  # Defaults to de_DE-thorsten-high
-    response_format: str = "wav"
-    speed: float = 1.0
-
-
-@app.post("/v1/audio/speech")
-async def create_speech(request: SpeechRequest):
-    if not request.input.strip():
-        logger.warning("Received empty input text for TTS generation.")
-        raise HTTPException(status_code=400, detail="Input text cannot be empty")
-
-    logger.debug(
-        f"Received TTS request | Voice: {request.voice} | Format: {request.response_format} | Text: '{request.input[:50]}...'"
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint,
+        aws_access_key_id=settings.s3_access_key,
+        aws_secret_access_key=settings.s3_secret_key.get_secret_value(),
     )
 
-    voice = get_voice(request.voice)
+    # 1. Check if the audio already exists in S3 (Cache Hit)
+    try:
+        s3_client.head_object(Bucket=settings.s3_bucket, Key=filename)
+        logger.info(f"Cache hit for text: '{text[:30]}...'. Skipping synthesis.")
+        return file_url
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "404":
+            pass  # File doesn't exist, proceed to generate
+        else:
+            logger.error(f"S3 Check Error: {e}")
 
+    # 2. Generate Audio (Cache Miss)
+    logger.info(f"Synthesizing new audio for: '{text[:30]}...'")
+    voice = get_voice(settings.default_voice)
     fd_wav, temp_wav = tempfile.mkstemp(suffix=".wav")
     os.close(fd_wav)
 
     try:
-        # Synthesize audio
         with wave.open(temp_wav, "wb") as wav_file:
-            voice.synthesize_wav(request.input, wav_file)
+            voice.synthesize_wav(text, wav_file)
 
-        logger.debug(f"Successfully synthesized WAV to {temp_wav}")
+        # 3. Upload to S3
+        s3_client.upload_file(
+            temp_wav,
+            settings.s3_bucket,
+            filename,
+            ExtraArgs={"ContentType": "audio/wav"},
+        )
+        return file_url
 
-        # 1. Return WAV immediately and clean it up automatically
-        if request.response_format.lower() == "wav":
-            return FileResponse(
-                temp_wav,
-                media_type="audio/wav",
-                background=BackgroundTask(os.remove, temp_wav),
+    finally:
+        if os.path.exists(temp_wav):
+            os.remove(temp_wav)
+
+
+# --- MQTT Loop ---
+async def main_async():
+    logger.info(f"Pre-loading default voice: {settings.default_voice}")
+    get_voice(settings.default_voice)
+
+    try:
+        async with aiomqtt.Client(
+            settings.mqtt_host, port=settings.mqtt_port
+        ) as client:
+            logger.info(
+                f"Connected to MQTT Broker at {settings.mqtt_host}:{settings.mqtt_port}"
             )
 
-        # 2. Convert to MP3
-        logger.debug(f"Converting WAV to {request.response_format.upper()}...")
-        fd_mp3, temp_mp3 = tempfile.mkstemp(suffix=f".{request.response_format}")
-        os.close(fd_mp3)
+            await client.subscribe("voice/tts/generate")
+            logger.info("Listening for tasks on 'voice/tts/generate'...")
 
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                temp_wav,
-                "-vn",
-                "-ar",
-                "24000",
-                "-ac",
-                "1",
-                "-b:a",
-                "64k",
-                temp_mp3,
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+            async for message in client.messages:
+                payload = json.loads(message.payload.decode())
+                room = payload.get("room")
+                text = payload.get("text")
 
-        # Cleanup logic for MP3 conversion
-        def cleanup_files():
-            if os.path.exists(temp_wav):
-                os.remove(temp_wav)
-            if os.path.exists(temp_mp3):
-                os.remove(temp_mp3)
+                if not room or not text:
+                    logger.warning("Received invalid payload missing 'room' or 'text'.")
+                    continue
 
-        content_type = (
-            f"audio/{request.response_format}"
-            if request.response_format != "mp3"
-            else "audio/mpeg"
-        )
-        return FileResponse(
-            temp_mp3, media_type=content_type, background=BackgroundTask(cleanup_files)
-        )
+                try:
+                    # Run blocking synthesis/upload in background thread
+                    audio_url = await asyncio.to_thread(synthesize_and_upload, text)
 
-    except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg conversion failed: {e}")
-        if os.path.exists(temp_wav):
-            os.remove(temp_wav)
-        raise HTTPException(status_code=500, detail="Audio format conversion failed.")
+                    if audio_url:
+                        # Construct the action payload exactly as the satellite expects it
+                        action_payload = {
+                            "actions": [
+                                {
+                                    "type": "play_audio",
+                                    "payload": {"audio_url": audio_url},
+                                }
+                            ]
+                        }
 
-    except Exception as e:
-        logger.error(f"Error during TTS generation: {e}", exc_info=True)
-        if os.path.exists(temp_wav):
-            os.remove(temp_wav)
-        raise HTTPException(status_code=500, detail=str(e))
+                        # Publish back to the specific satellite's action topic
+                        logger.info(
+                            f"Publishing audio action to satellite/{room}/action"
+                        )
+                        await client.publish(
+                            f"satellite/{room}/action",
+                            payload=json.dumps(action_payload),
+                        )
+
+                except Exception as e:
+                    logger.error(f"Failed to generate TTS for {room}: {e}")
+
+    except aiomqtt.MqttError as error:
+        logger.error(f"MQTT Error: {error}")
+    except KeyboardInterrupt:
+        logger.info("Shutting down TTS worker...")
+    finally:
+        loaded_voices.clear()
 
 
 def main():
-    logger.info(f"Starting Piper TTS API on {settings.host}:{settings.port}...")
-    uvicorn.run(
-        "main:app",
-        host=settings.host,
-        port=settings.port,
-        log_level=settings.log_level.lower(),
-    )
+    """Synchronous wrapper for the setuptools entry point."""
+    import asyncio
 
-
-if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main_async())
+    except KeyboardInterrupt:
+        pass

@@ -28,12 +28,12 @@
 
       # --- Dependency List ---
       apiDependencies = with python.pkgs; [
-        fastapi
-        uvicorn
         pydantic
+        boto3
+        aiomqtt
         pydantic-settings
         python-dotenv
-        pkgs.piper-tts # Provided by Nixpkgs
+        pkgs.piper-tts
       ];
 
     in
@@ -47,12 +47,12 @@
 
           propagatedBuildInputs = apiDependencies;
 
-          # Ensure FFmpeg is available to the application at runtime for MP3 conversion
-          nativeBuildInputs = [ pkgs.makeWrapper ];
-          postInstall = ''
-            wrapProgram $out/bin/voice_tts \
-              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.ffmpeg_7-headless ]}
-          '';
+          # # Ensure FFmpeg is available to the application at runtime for MP3 conversion
+          # nativeBuildInputs = [ pkgs.makeWrapper ];
+          # postInstall = ''
+          #   wrapProgram $out/bin/voice_tts \
+          #     --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.ffmpeg_7-headless ]}
+          # '';
         };
       };
 
