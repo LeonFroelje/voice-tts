@@ -40,7 +40,7 @@
     {
       packages.${system} = {
         default = python.pkgs.buildPythonApplication {
-          pname = "voiceTts";
+          pname = "voice-tts";
           version = "0.1.0";
           pyproject = true;
           src = ./.;
@@ -168,7 +168,7 @@
 
               serviceConfig = {
                 # Update this if your binary name changed in pyproject.toml during the refactor!
-                ExecStart = "${cfg.package}/bin/voice_tts";
+                ExecStart = "${cfg.package}/bin/voice-tts";
                 EnvironmentFile = lib.mkIf (cfg.environmentFile != null) cfg.environmentFile;
 
                 # State Management (Stores the downloaded ONNX voices)
