@@ -76,7 +76,6 @@ def synthesize_and_upload(text: str) -> str:
         f"{settings.default_voice}_{text}".encode("utf-8")
     ).hexdigest()
     filename = f"tts_{text_hash}.wav"
-    file_url = f"{settings.s3_endpoint}/{settings.s3_bucket}/{filename}"
 
     s3_client = boto3.client(
         "s3",
@@ -91,7 +90,7 @@ def synthesize_and_upload(text: str) -> str:
     try:
         s3_client.head_object(Bucket=settings.s3_bucket, Key=filename)
         logger.info(f"Cache hit for text: '{text[:30]}...'. Skipping synthesis.")
-        return file_url
+        return filename
     except ClientError as e:
         if e.response["Error"]["Code"] == "404":
             pass  # File doesn't exist, proceed to generate
@@ -115,7 +114,7 @@ def synthesize_and_upload(text: str) -> str:
             filename,
             ExtraArgs={"ContentType": "audio/wav"},
         )
-        return file_url
+        return filename
 
     finally:
         if os.path.exists(temp_wav):
@@ -149,15 +148,15 @@ async def main_async():
 
                 try:
                     # Run blocking synthesis/upload in background thread
-                    audio_url = await asyncio.to_thread(synthesize_and_upload, text)
+                    filename = await asyncio.to_thread(synthesize_and_upload, text)
 
-                    if audio_url:
+                    if filename:
                         # Construct the action payload exactly as the satellite expects it
                         action_payload = {
                             "actions": [
                                 {
                                     "type": "play_audio",
-                                    "payload": {"audio_url": audio_url},
+                                    "payload": {"filename": filename},
                                 }
                             ]
                         }
